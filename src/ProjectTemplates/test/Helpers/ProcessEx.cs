@@ -9,6 +9,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Internal;
 using Xunit.Abstractions;
@@ -26,6 +27,7 @@ namespace Templates.Test.Helpers
         private readonly object _pipeCaptureLock = new object();
         private BlockingCollection<string> _stdoutLines;
         private TaskCompletionSource<int> _exited;
+        private CancellationTokenSource _stdoutLinesCancellationSource = new CancellationTokenSource(TimeSpan.FromMinutes(5));
 
         public ProcessEx(ITestOutputHelper output, Process proc)
         {
@@ -71,7 +73,7 @@ namespace Templates.Test.Helpers
             }
         }
 
-        public IEnumerable<string> OutputLinesAsEnumerable => _stdoutLines.GetConsumingEnumerable();
+        public IEnumerable<string> OutputLinesAsEnumerable => _stdoutLines.GetConsumingEnumerable(_stdoutLinesCancellationSource.Token);
 
         public int ExitCode => _process.ExitCode;
 
@@ -162,7 +164,7 @@ namespace Templates.Test.Helpers
         {
             if (!_process.HasExited)
             {
-                throw new InvalidOperationException("Process has not finished running.");
+                throw new InvalidOperationException($"Process {_process.ProcessName} with pid: {_process.Id} has not finished running.");
             }
 
             return $"Process exited with code {_process.ExitCode}\nStdErr: {Error}\nStdOut: {Output}";
@@ -172,12 +174,16 @@ namespace Templates.Test.Helpers
         {
             if(!timeSpan.HasValue)
             {
-                timeSpan = TimeSpan.FromSeconds(480);
+                timeSpan = TimeSpan.FromSeconds(600);
             }
 
-            Exited.Wait(timeSpan.Value);
-
-            if (assertSuccess && _process.ExitCode != 0)
+            var exited = Exited.Wait(timeSpan.Value);
+            if (!exited)
+            {
+                _output.WriteLine($"The process didn't exit within the allotted time ({timeSpan.Value.TotalSeconds} seconds).");
+                _process.Dispose();
+            }
+            else if (assertSuccess && _process.ExitCode != 0)
             {
                 throw new Exception($"Process exited with code {_process.ExitCode}\nStdErr: {Error}\nStdOut: {Output}");
             }
